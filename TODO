@@ -1,0 +1,22 @@
+v0.0.1
+==========
+- basic implementation                                       | ✔
+- fill out rest of the panics                                |
+- test coverage at 90%                                       |
+- continuous build setup                                     |
+- FailWriteFile                                              |
+- FailReadFile                                               |
+
+v0.0.2
+==========
+- permissions/groups figured out                             |
+- uid, gid figured out                                       |
+- Sporadic FailFile                                          |
+- fs_files.go (functions for loadable FakeOSs)               |
+- ability to save parts of real systems to FakeOS files      |
+
+v0.0.3
+==========
+- FakeDarwin                                                 |
+- FakeWindows                                                |
+- future Road map?                                           |
