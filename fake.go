@@ -1,10 +1,12 @@
 package fs
 
 import (
+	"errors"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -27,6 +29,9 @@ type fakeOS struct {
 
 	// current user info
 	uid, gid int
+
+	// groups
+	groups map[int][]int
 
 	// other info
 	pagesize  int
@@ -52,6 +57,11 @@ func FakeOS() OperatingSystem {
 		uid: 501, // no idea what a good value for this is
 		// maybe grab the real one?
 		gid: 20, //  this is staff on macs? better value?
+
+		// TODO(ttacon): prepopulate with values?
+		groups: map[int][]int{
+			501: []int{20},
+		},
 
 		// interestingly, for any go program pid = ppid +3
 		pid:  18012,
@@ -192,7 +202,8 @@ func (d *fakeOS) Getgid() int {
 }
 
 func (d *fakeOS) Getgroups() ([]int, error) {
-	panic("UNIMPLEMENTED")
+	gids, _ := d.groups[d.uid]
+	return gids, nil
 }
 
 func (d *fakeOS) Getpagesize() int {
@@ -391,7 +402,15 @@ func (d *fakeOS) Remove(name string) error {
 }
 
 func (d *fakeOS) RemoveAll(path string) error {
-	panic("UNIMPLEMENTED")
+	// TODO(ttacon): make this not so lazy - will require changing how "files"
+	// are scored
+	path = strings.TrimSuffix(path, "/")
+	for k, _ := range d.files {
+		if strings.HasPrefix(k, path) {
+			delete(d.files, k)
+		}
+	}
+	return nil
 }
 
 func (d *fakeOS) Rename(oldname, newname string) error {
@@ -417,7 +436,12 @@ func (d *fakeOS) Rename(oldname, newname string) error {
 }
 
 func (d *fakeOS) SameFile(fi1, fi2 os.FileInfo) bool {
-	panic("UNIMPLEMENTED")
+	ff1, ok1 := fi1.(*fakeFile)
+	ff2, ok2 := fi2.(*fakeFile)
+	if !ok1 || !ok2 {
+		return false
+	}
+	return ff1 == ff2
 }
 
 func (d *fakeOS) Setenv(key, value string) error {
@@ -614,10 +638,6 @@ func (d *fakeOS) Pipe() (r File, w File, err error) {
 }
 
 func (d *fakeOS) Lstat(name string) (fi os.FileInfo, err error) {
-	panic("UNIMPLEMENTED")
-}
-
-func (d *fakeOS) Stat(name string) (fi os.FileInfo, err error) {
 	d.lock.Lock()
 	// TODO(ttacon): need to be able to simulate if the current
 	// user has permission to do this or not
@@ -626,13 +646,50 @@ func (d *fakeOS) Stat(name string) (fi os.FileInfo, err error) {
 	if !ok {
 		d.lock.Unlock()
 		return nil, &os.PathError{
-			Op:   "chmod",
+			Op:   "lstat",
 			Path: name,
 			Err:  syscall.Errno(syscall.ENOENT),
 		}
 	}
 
 	toReturn := f.info
+	d.lock.Unlock()
+	return toReturn, nil
+}
+
+func (d *fakeOS) Stat(name string) (fi os.FileInfo, err error) {
+	d.lock.Lock()
+	// TODO(ttacon): need to be able to simulate if the current
+	// user has permission to do this or not
+
+	// we refuse to let the user be horrid and create a loop
+	var (
+		seen     = make(map[string]struct{})
+		toReturn os.FileInfo
+	)
+	for {
+		if _, ok := seen[name]; ok {
+			// TODO(ttacon): identify correct error message
+			return nil, errors.New("link cycle detected, failing")
+		}
+
+		f, ok := d.files[name]
+		if !ok {
+			d.lock.Unlock()
+			return nil, &os.PathError{
+				Op:   "stat",
+				Path: name,
+				Err:  syscall.Errno(syscall.ENOENT),
+			}
+		}
+
+		toReturn = f.info
+		if len(f.pointsTo) == 0 {
+			break
+		}
+		seen[name] = struct{}{}
+		name = f.pointsTo
+	}
 	d.lock.Unlock()
 	return toReturn, nil
 }
