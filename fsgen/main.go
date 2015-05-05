@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ttacon/chalk"
 	"github.com/ttacon/fs"
@@ -27,6 +29,8 @@ var (
 
 	defOS   = fs.DefaultOS()
 	origDir fs.File
+
+	currDataMap = make(map[string]fakeFile)
 )
 
 func main() {
@@ -98,6 +102,7 @@ func repl() {
 					continue
 				}
 			}
+			// TODO(ttacon): don't let us try to open files (only dirs)
 
 			cwd = newDir.Name()
 			cwdEnd = filepath.Base(cwd)
@@ -108,11 +113,60 @@ func repl() {
 				oldDir.Close()
 			}
 		} else if strings.HasPrefix(nextLine, "sync") {
+			fileName := strings.TrimSpace(strings.TrimPrefix(nextLine, "sync"))
+			fileLoc := filepath.Join(cwd, fileName)
+			syncFile, err := defOS.Open(fileLoc)
+			if err != nil {
+				syncFile, err = defOS.Open(fileName)
+				fileLoc = fileName
+				if err != nil {
+					errMessage("failed to change directory, err: ", err)
+					continue
+				}
+			}
+			info, err := syncFile.Stat()
+			if err != nil {
+				errMessage("failed to open file, err: ", err)
+				syncFile.Close()
+				continue
+			}
 
+			fmt.Println("file: ", info.Name())
+			fmt.Println("size: ", info.Size())
+
+			content, err := ioutil.ReadAll(syncFile)
+			if err != nil && !info.IsDir() {
+				errMessage("failed to read all of file, err: ", err)
+				syncFile.Close()
+				continue
+			}
+
+			currDataMap[fileLoc] = fakeFile{
+				name:    filepath.Base(fileLoc),
+				content: content,
+				isDir:   info.IsDir(),
+				mode:    info.Mode(),
+			}
+
+			syncFile.Close()
+			fmt.Printf("%#v\n", currDataMap)
 		} else if nextLine == "exit" || nextLine == "quit" {
 			return
 		}
 	}
+}
+
+type fakeFile struct {
+	fd                     int
+	name                   string
+	access, modify, change time.Time
+	isDir                  bool
+	rdwrFlag               int
+	mode                   os.FileMode
+	info                   os.FileInfo
+	uid, gid               int
+	pointsTo               string // for links
+	content                []byte
 }
 
 func listCommands() {
