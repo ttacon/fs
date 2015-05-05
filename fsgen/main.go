@@ -14,13 +14,19 @@ import (
 
 var (
 	interactive = flag.Bool("i", false, "run fsgen in interactive mode")
+	currentFile = flag.String("f", "", "fsgen file to use")
 )
+
+// TODO(ttacon): parse the generate go files to get the info we need
 
 var (
 	title     = chalk.Magenta.Color("[fsgen]:")
 	errPrompt = chalk.Bold.NewStyle().WithForeground(chalk.Red).Style("ERROR")
+	dirColor  = chalk.Green.Color("%s")
+	dirPrompt = chalk.Magenta.Color("[fsgen $ " + dirColor + "]")
 
-	defOS = fs.DefaultOS()
+	defOS   = fs.DefaultOS()
+	origDir fs.File
 )
 
 func main() {
@@ -41,16 +47,18 @@ func repl() {
 		errMessage("failed to get cwd, err: ", err)
 		return
 	}
+	cwdEnd := filepath.Base(cwd)
 
 	f, err := defOS.Open(cwd)
 	if err != nil {
 		errMessage("failed to open current directory, err: ", err)
 		return
 	}
+	origDir = f
+	defer origDir.Close()
 
 	for {
-		// TODO(ttacon): make prompt reflect current directory?
-		fmt.Print("> ")
+		fmt.Print(fmt.Sprintf(dirPrompt, cwdEnd) + " > ")
 		nextLine, err := in.ReadString('\n')
 		if err != nil {
 			errMessage("failed to read next line, err: ", err)
@@ -59,37 +67,46 @@ func repl() {
 
 		nextLine = strings.TrimSpace(nextLine)
 		if nextLine == "ls" {
-			entities, err := f.Readdirnames(-1)
+			entities, err := f.Readdir(-1)
 			if err != nil {
 				errMessage("failed to read directory, err: ", err)
 				return
 			}
 
-			fmt.Println(strings.Join(entities, "\n"))
+			var entries = make([]string, len(entities))
+			for i, entity := range entities {
+				entry := entity.Name()
+				if entity.IsDir() {
+					entry = chalk.Yellow.Color(entry + "/")
+				}
+				entries[i] = entry
+			}
+
+			fmt.Println(strings.Join(entries, "\n"))
 		} else if nextLine == "help" {
 			listCommands()
 		} else if strings.HasPrefix(nextLine, "cd") {
-			// TODO(ttacon): support .. and ~, or are they transparently
-			// supported through filepath.Join?
-
-			dir := strings.TrimSpace(strings.TrimPrefix(nextLine, "cd"))
+			// NOTE(ttacon): ~ is not currently supported
+			solelyDir := strings.TrimSpace(strings.TrimPrefix(nextLine, "cd"))
+			dir := filepath.Join(cwd, solelyDir)
 			newDir, err := defOS.Open(dir)
 			if err != nil {
-				dir = filepath.Join(cwd, dir)
+				dir = solelyDir
 				newDir, err = defOS.Open(dir)
 				if err != nil {
 					errMessage("failed to change directory, err: ", err)
 					continue
-				} else {
-					cwd = dir
 				}
-			} else {
-				cwd = dir
 			}
+
+			cwd = newDir.Name()
+			cwdEnd = filepath.Base(cwd)
 
 			oldDir := f
 			f = newDir
-			oldDir.Close()
+			if oldDir != origDir {
+				oldDir.Close()
+			}
 		} else if strings.HasPrefix(nextLine, "sync") {
 
 		} else if nextLine == "exit" || nextLine == "quit" {
